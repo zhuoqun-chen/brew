@@ -76,7 +76,7 @@ class Keg
   sig { returns(T::Boolean) }
   def formula_preserve_rpath?
     installed_formula = path/".brew/#{name}.rb"
-    Formula[installed_formula.file? ? installed_formula : name].preserve_rpath?
+    (installed_formula.file? ? Formulary.from_path(installed_formula) : Formula[name]).preserve_rpath?
   rescue FormulaUnavailableError
     false
   end
