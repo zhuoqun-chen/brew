@@ -4,6 +4,7 @@
 require "bundle"
 require "bundle/dsl"
 require "bundle/shared_examples/inventory"
+require "bundle/shared_examples/upgradable_extension"
 require "bundle/extensions/go"
 
 RSpec.describe Homebrew::Bundle::Go do
@@ -16,6 +17,62 @@ RSpec.describe Homebrew::Bundle::Go do
   end
   let(:inventory_output) { "\tpath\texample.com/tool\n" }
   let(:inventory_records) { ["example.com/tool"] }
+
+  describe ".package_outdated?" do
+    before do
+      described_class.reset!
+      allow(described_class).to receive_messages(
+        package_manager_executable: Pathname("go"),
+        discovered_binaries:        { "/tmp/tool" => "example.com/tools/cmd/tool" },
+      )
+      allow(described_class).to receive(:command_output)
+        .with(Pathname("go"), args: ["version", "-m", "/tmp/tool"])
+        .and_return("\tmod\texample.com/tools\tv1.0.0\th1:hash\n")
+      allow(described_class).to receive(:command_output)
+        .with(Pathname("go"), args: ["list", "-m", "-f", "{{.Version}}", "example.com/tools@latest"])
+        .and_return("v1.1.0\n")
+    end
+
+    it "checks the module version rather than the command package path" do
+      expect(described_class.package_outdated?("example.com/tools/cmd/tool")).to be(true)
+    end
+
+    it "discovers binaries once between resets" do
+      expect(described_class).to receive(:discovered_binaries)
+        .with(Pathname("go")).twice.and_return({ "/tmp/tool" => "example.com/tools/cmd/tool" })
+      2.times do
+        2.times { described_class.package_outdated?("example.com/tools/cmd/tool") }
+        described_class.reset!
+      end
+    end
+
+    it "does not downgrade a newer installed version" do
+      allow(described_class).to receive(:command_output)
+        .with(Pathname("go"), args: ["version", "-m", "/tmp/tool"])
+        .and_return("\tmod\texample.com/tools\tv1.2.0\th1:hash\n")
+      expect(described_class.package_outdated?("example.com/tools/cmd/tool")).to be(false)
+    end
+
+    it "rejects invalid latest version output" do
+      allow(described_class).to receive(:command_output)
+        .with(Pathname("go"), args: ["list", "-m", "-f", "{{.Version}}", "example.com/tools@latest"])
+        .and_return("")
+      expect { described_class.package_outdated?("example.com/tools/cmd/tool") }
+        .to raise_error(RuntimeError, /Invalid Go version/)
+    end
+  end
+
+  describe "upgrades" do
+    it_behaves_like "an upgradable extension", "example.com/tool"
+
+    it "upgrades an installed package using the package manager" do
+      allow(described_class).to receive_messages(package_manager_executable: Pathname("go"),
+                                                 package_installed?: true, packages: [], installed_packages: [])
+      expect(Homebrew::Bundle).to receive(:system).with("go", "install", "example.com/tool@latest",
+                                                        verbose: false).and_return(true)
+      described_class.install!("example.com/tool")
+    end
+  end
 
   describe "checked inventory" do
     before do
@@ -259,16 +316,21 @@ RSpec.describe Homebrew::Bundle::Go do
   end
 
   describe "bootstrap cache invalidation" do
-    let(:bootstrap_executable) { Pathname("go") }
-
     before do
-      allow(described_class).to receive(:discovered_binaries).and_return({ "/tmp/tool" => "example.com/tool" })
+      allow(described_class).to receive_messages(package_outdated?:   false,
+                                                 discovered_binaries: { "/tmp/tool" => "example.com/tool" })
     end
+
+    let(:bootstrap_executable) { Pathname("go") }
 
     it_behaves_like "an inventory refreshed after bootstrap", "example.com/tool"
   end
 
   describe "installing" do
+    before do
+      allow(described_class).to receive(:package_outdated?).and_return(false)
+    end
+
     context "when Go is not installed" do
       before do
         described_class.reset!

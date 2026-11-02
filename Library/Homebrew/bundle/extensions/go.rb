@@ -23,6 +23,7 @@ module Homebrew
         def reset!
           @packages = T.let(nil, T.nilable(T::Array[String]))
           @installed_packages = T.let(nil, T.nilable(T::Array[String]))
+          @discovered_binaries = T.let(nil, T.nilable(T::Hash[String, String]))
         end
 
         sig { override.returns(T.nilable(String)) }
@@ -116,6 +117,30 @@ module Homebrew
         sig { override.returns(T::Array[String]) }
         def installed_packages
           @installed_packages ||= packages.dup
+        end
+
+        sig {
+          override.params(name: String, with: T.nilable(T::Array[String]), source: T.nilable(String)).returns(T::Boolean)
+        }
+        def package_outdated?(name, with: nil, source: nil)
+          go = package_manager_executable!
+          @discovered_binaries ||= discovered_binaries(go)
+          @discovered_binaries.any? do |binary, package_path|
+            next false if package_path != name
+
+            mod = command_output(go, args: ["version", "-m", binary]).each_line.find do |line|
+              line.start_with?("\tmod\t")
+            end
+            next true unless mod
+
+            _, module_path, version = mod.split
+            next true if version.nil? || version == "(devel)"
+
+            latest = command_output(go, args: ["list", "-m", "-f", "{{.Version}}", "#{module_path}@latest"]).strip
+            raise "Invalid Go version for #{name}: #{latest.inspect}" unless latest.match?(/\Av\d+\.\d+\.\d+/)
+
+            Version.new(latest) > Version.new(version)
+          end
         end
 
         sig { override.params(items: T::Array[String]).void }

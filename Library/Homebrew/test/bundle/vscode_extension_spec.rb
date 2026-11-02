@@ -14,6 +14,51 @@ RSpec.describe Homebrew::Bundle::VscodeExtension do
   it_behaves_like "a checked package inventory"
   it_behaves_like "a checked inventory", :installed_packages
 
+  describe "upgrades" do
+    before do
+      allow(described_class).to receive_messages(package_manager_executable: Pathname("code"),
+                                                 installed_extensions:       ["example.extension"])
+    end
+
+    it "reports that installed extensions require a native upgrade check" do
+      expect(described_class.check([Homebrew::Bundle::Dsl::Entry.new(:vscode, "example.extension")]))
+        .to eq(["VSCode Extension example.extension needs to be checked for upgrades."])
+    end
+
+    it "does not run the editor during the read-only check" do
+      expect(Homebrew::Bundle).not_to receive(:system)
+      described_class.check([Homebrew::Bundle::Dsl::Entry.new(:vscode, "example.extension")])
+    end
+
+    it "accepts an installed extension with no_upgrade" do
+      expect(described_class.check([Homebrew::Bundle::Dsl::Entry.new(:vscode, "example.extension")],
+                                   no_upgrade: true))
+        .to be_empty
+    end
+
+    it "schedules native upgrade checks for installed extensions" do
+      expect(described_class.preinstall!("example.extension")).to be(true)
+    end
+
+    it "skips installed extensions with no_upgrade" do
+      expect(described_class.preinstall!("example.extension", no_upgrade: true)).to be(false)
+    end
+
+    it "asks the editor to upgrade only the requested extension" do
+      expect(Homebrew::Bundle).to receive(:system)
+        .with(Pathname("code"), "--install-extension", "example.extension", "--force", verbose: false)
+        .and_return(true)
+      described_class.install!("example.extension")
+    end
+
+    it "upgrades only the requested extensions in a native batch" do
+      expect(Homebrew::Bundle).to receive(:system)
+        .with(Pathname("code"), "--install-extension", "example.extension", "--force", verbose: false)
+        .and_return(true)
+      described_class.install_batch!([Homebrew::Bundle::Dsl::Entry.new(:vscode, "example.extension")])
+    end
+  end
+
   describe "cleanup" do
     test_each([false, nil]) do |result|
       it "reports #{result.inspect} and continues cleanup" do
@@ -125,12 +170,12 @@ RSpec.describe Homebrew::Bundle::VscodeExtension do
 
         it "skips" do
           expect(Homebrew::Bundle).not_to receive(:system)
-          expect(described_class.preinstall!("foo")).to be(false)
+          expect(described_class.preinstall!("foo", no_upgrade: true)).to be(false)
         end
 
         it "skips ignoring case" do
           expect(Homebrew::Bundle).not_to receive(:system)
-          expect(described_class.preinstall!("Foo")).to be(false)
+          expect(described_class.preinstall!("Foo", no_upgrade: true)).to be(false)
         end
       end
 
